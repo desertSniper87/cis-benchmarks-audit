@@ -1,7 +1,12 @@
 [
   {
-    "label": "Run current cis_audit.py",
-    "command": "PYTHONPATH=$ZED_WORKTREE_ROOT python cis_audit.py",
+    "label": "Run cis_audit.py",
+    "command": "PYTHONPATH=$ZED_WORKTREE_ROOT python3 cis_audit.py",
+    "use_new_terminal": false
+  },
+  {
+    "label": "Run cis_audit.py with debug",
+    "command": "PYTHONPATH=$ZED_WORKTREE_ROOT python3 cis_audit.py --debug",
     "use_new_terminal": false
   }
 ]
