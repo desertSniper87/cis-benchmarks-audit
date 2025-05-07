@@ -1250,8 +1250,9 @@ class CISAudit:
     def audit_kernel_module_is_disabled(self, l_mname: str, l_mtype: str) -> int:
         state = 0
 
-        def module_check():
-            nonlocal state
+        def module_check() -> str: 
+            nonlocal state, l_mname, l_mtype 
+
             l_output = ""
             l_output2 = ""
             l_output3 = ""
@@ -1337,7 +1338,6 @@ class CISAudit:
             # Report results. If no failures output in l_output2, we pass
             if l_output3:
                 print(f"\n\n -- INFO --\n - module: \"{l_mname}\" exists in:{l_output3}")
-                state = 1
 
             if not l_output2:
                 print(f"\n- Audit Result:\n ** PASS **\n{l_output}\n")
@@ -1346,8 +1346,86 @@ class CISAudit:
                 if l_output:
                     print(f"\n- Correctly set:\n{l_output}\n")
 
+
         module_check()
+        print(f'state = {state}') 
+        if state > 0 and self.config.fix:
+            self.log.info(f"Fixing audit_kernel_module_is_disabled") 
+            self.fix_audit_kernel_module_is_disabled(l_mname, l_mtype)
+            module_check()
+
+
         return state
+
+    def fix_audit_kernel_module_is_disabled(self, l_mname, l_mtype) -> None: 
+       l_mpath = "/lib/modules/**/kernel/" + l_mtype
+       l_mpname = l_mname.replace('-', '_')
+       l_mndir = l_mname.replace('-', '/')
+       
+       def module_loadable_fix():
+           # If the module is currently loadable, add "install {MODULE_NAME} /bin/false" to a file in "/etc/modprobe.d"
+           try:
+               l_loadable = subprocess.check_output(["modprobe", "-n", "-v", l_mname], 
+                                                  stderr=subprocess.STDOUT, 
+                                                  universal_newlines=True)
+           except subprocess.CalledProcessError as e:
+               l_loadable = e.output
+               
+           if len(l_loadable.splitlines()) > 1:
+               filtered_lines = []
+               for line in l_loadable.splitlines():
+                   if re.search(r"(^\s*install|\b" + l_mname + r')\b', line):
+                       filtered_lines.append(line)
+               l_loadable = "\n".join(filtered_lines)
+               
+           if not re.search(r"^\s*install\s+/bin/(true|false)", l_loadable):
+               print(f"\n - setting module: \"{l_mname}\" to be not loadable")
+               with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
+                   f.write(f"install {l_mname} /bin/false\n")
+       
+       def module_loaded_fix():
+           # If the module is currently loaded, unload the module
+           try:
+               lsmod_output = subprocess.check_output(["lsmod"], universal_newlines=True)
+               if l_mname in lsmod_output:
+                   print(f"\n - unloading module \"{l_mname}\"")
+                   subprocess.run(["modprobe", "-r", l_mname], check=True)
+           except subprocess.CalledProcessError:
+               pass
+       
+       def module_deny_fix():
+           self.log.info(f"deny listing \"{l_mname}\"") 
+           # If the module isn't deny listed, denylist the module
+           try:
+               modprobe_config = subprocess.check_output(["modprobe", "--showconfig"], 
+                                                        universal_newlines=True)
+               
+               if not re.search(r"^\s*blacklist\s+" + l_mpname + r'\b', modprobe_config, re.MULTILINE):
+                   print(f"\n - deny listing \"{l_mname}\"")
+                   with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
+                       f.write(f"blacklist {l_mname}\n")
+           except subprocess.CalledProcessError:
+               # If modprobe --showconfig fails, assume module is not deny listed
+               print(f"\n - deny listing \"{l_mname}\"")
+               with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
+                   f.write(f"blacklist {l_mname}\n")
+       
+       # Check if the module exists on the system
+       module_dirs = glob.glob(l_mpath, recursive=True)
+       for l_mdir in module_dirs:
+           module_path = os.path.join(l_mdir, l_mndir)
+           if os.path.isdir(module_path) and len(os.listdir(module_path)) > 0:
+               print(f"\n - module: \"{l_mname}\" exists in \"{l_mdir}\"\n - checking if disabled...")
+               module_deny_fix()
+               
+               current_kernel = subprocess.check_output(["uname", "-r"], 
+                                                      universal_newlines=True).strip()
+               if l_mdir == f"/lib/modules/{current_kernel}/kernel/{l_mtype}":
+                   module_loadable_fix()
+                   module_loaded_fix()
+           else:
+               print(f"\n - module: \"{l_mname}\" doesn't exist in \"{l_mdir}\"")
+
 
 
     def audit_mta_is_localhost_only(self) -> int:
@@ -2342,7 +2420,7 @@ benchmarks = {
             {'_id': "1.1", 'description': "Filesystem Configuration", 'type': "header"},
             {'_id': "1.1.1", 'description': "Disable unused filesystems", 'type': "header"},
             {'_id': "1.1.1.1", 'description': "Ensure mounting of cramfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'cramfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            # {'_id': "1.1.1.2", 'description': "Ensure mounting of squashfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'squashfs'}, 'levels': {'server': 2, 'workstation': 2}},
+            {'_id': "1.1.1.2", 'description': "Ensure mounting of squashfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'freevxfs'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.1.3", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'udf'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.2", 'description': 'Ensure /tmp is configured', 'function': CISAudit.audit_partition_is_separate, 'kwargs': {'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.3", 'description': 'Ensure noexec option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'noexec', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
@@ -2684,6 +2762,7 @@ Examples:
     parser.add_argument('--exclude', action='store', nargs='+', dest='excludes', help='Space delimited list of tests to exclude')
     parser.add_argument('-l', '--log-level', action='store', choices=log_level_choices, default='INFO', help='Set log output level')
     parser.add_argument('--debug', action='store_const', const='DEBUG', dest='log_level', help='Run script with debug output turned on. Equivalent to --log-level DEBUG')
+    parser.add_argument('--fix', action='store_const', const='True', dest='fix', help='Run script and execute remediation on ran tests')
     parser.add_argument('--nice', action='store_true', default=True, help='Lower the CPU priority for test execution. This is the default behaviour.')
     parser.add_argument('--no-nice', action='store_false', dest='nice', help='Do not lower CPU priority for test execution. This may make the tests complete faster but at the cost of putting a higher load on the server. Setting this overrides the --nice option.')
     parser.add_argument('--no-colour', '--no-color', action='store_true', help='Disable colouring for STDOUT. Output redirected to a file/pipe is never coloured.')
@@ -2707,6 +2786,13 @@ Examples:
     if args.log_level == 'DEBUG':
         logger.setLevel(level=args.log_level)
         logger.debug('Debugging enabled')
+
+    ## --fix
+    if args.fix:
+        logger.debug('Remediation enabled')
+        if os.getuid() != 0: 
+            logger.error('Remediation requires root privileges') 
+            sys.exit(1) 
 
     ## --nice
     if args.nice:
