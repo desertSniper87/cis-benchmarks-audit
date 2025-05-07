@@ -1351,6 +1351,7 @@ class CISAudit:
         if state > 0 and self.config.fix:
             self.log.info(f"Fixing audit_kernel_module_is_disabled") 
             self.fix_audit_kernel_module_is_disabled(l_mname, l_mtype)
+            state = 0
             module_check()
 
 
@@ -2420,7 +2421,8 @@ benchmarks = {
             {'_id': "1.1.1", 'description': "Disable unused filesystems", 'type': "header"},
             {'_id': "1.1.1.1", 'description': "Ensure mounting of cramfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'cramfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
             {'_id': "1.1.1.2", 'description': "Ensure mounting of freevxfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'freevxfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            {'_id': "1.1.1.3", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'udf'}, 'levels': {'server': 1, 'workstation': 1}},
+            {'_id': "1.1.1.3", 'description': "Ensure mounting of hfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'hfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            # {'_id': "1.1.1.3", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'udf'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.2", 'description': 'Ensure /tmp is configured', 'function': CISAudit.audit_partition_is_separate, 'kwargs': {'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.3", 'description': 'Ensure noexec option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'noexec', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.4", 'description': 'Ensure nodev option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'nodev', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
