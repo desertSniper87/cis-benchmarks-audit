@@ -29,6 +29,7 @@ from argparse import (
 )
 from datetime import (
     datetime,  # https://docs.python.org/3/library/datetime.html#datetime.datetime
+    UTC
 )
 from grp import getgrgid  # https://docs.python.org/3/library/grp.html#grp.getgrgid
 from pwd import getpwuid  # https://docs.python.org/3/library/pwd.html#pwd.getpwuid
@@ -69,7 +70,7 @@ class CISAudit:
                 yield user, int(uid), homedir
 
     def _get_utcnow(self) -> datetime:
-        return datetime.utcnow()
+        return datetime.now(UTC)
 
     def _is_test_included(self, test_id, test_level) -> bool:
         """Check whether a test_id should be tested or not
@@ -1357,6 +1358,14 @@ class CISAudit:
 
         return state
 
+    def encryption_is_enabled(self) -> int: 
+        # Not implemented yet 
+        return -2
+
+    def cryptographic_mechanisms_enabled(self) -> int: 
+        # Not implemented yet 
+        return -2                                                        
+
     def fix_audit_kernel_module_is_disabled(self, l_mname, l_mtype) -> None: 
        l_mpath = "/lib/modules/**/kernel/" + l_mtype
        l_mpname = l_mname.replace('-', '_')
@@ -2092,15 +2101,40 @@ class CISAudit:
         return state
 
     def audit_sticky_bit_on_world_writable_dirs(self) -> int:
-        cmd = R"df --local -P 2> /dev/null | awk '{if (NR!=1) print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \)"
-        r = self._shellexec(cmd)
+        state = 0
+
+        def check():
+            cmd = R"df --local -P | awk '{if (NR!=1) print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \) 2>/dev/null"
+            return self._shellexec(cmd)
+
+        r = check() 
 
         if r.returncode == 0 and r.stdout[0] == '':
             state = 0
-        elif r.returncode == 0 and r.stdout[0] != '':
+        elif r.returncode != 0 or r.stdout[0] != '':
             state = 1
 
+        if state > 0 and self.config.fix:
+            self.log.info(f"Fixing audit_sticky_bit_on_world_writable_dirs")
+            self.fix_sticky_bit_on_world_writable_dir() 
+            r = check()
+
+            if r.returncode == 0 and r.stdout[0] == '':
+                state = 0
+            elif r.returncode != 0 or r.stdout[0] != '':
+                state = 1
+
+            
+
+
         return state
+
+    def fix_sticky_bit_on_world_writable_dir(self):
+        cmd = R"df --local -P | awk '{if (NR!=1) print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \) 2>/dev/null | xargs -I '{}' chmod a+t '{}'"
+
+        r = self._shellexec(cmd)
+
+
 
     def audit_sudo_commands_use_pty(self) -> int:
         state = 0
@@ -2427,7 +2461,10 @@ benchmarks = {
             {'_id': "1.1.1.6", 'description': "Ensure mounting of overlayfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'overlayfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}}, 
             {'_id': "1.1.1.7", 'description': "Ensure mounting of squashfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'squashfs', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}}, 
             {'_id': "1.1.1.8", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'udf', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}}, 
-            {'_id': "1.1.1.8", 'description': "Ensure mounting of usb-storage is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'usb-storage', 'l_mtype': 'drivers'}, 'levels': {'server': 1, 'workstation': 2, 'STIG': 1}}, 
+            {'_id': "1.1.1.9", 'description': "Ensure mounting of usb-storage is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'usb-storage', 'l_mtype': 'drivers'}, 'levels': {'server': 1, 'workstation': 2, 'STIG': 1}},
+            {'_id': "1.1.1.10", 'description': "Ensure data-at-rest encryption is enabled", 'function': CISAudit.encryption_is_enabled, 'levels': {'STIG': 1}}, 
+            {'_id': "1.1.1.11", 'description': "Ensure data-at-rest employs cryptographic mechanisms to prevent unauthorized modification", 'function': CISAudit.cryptographic_mechanisms_enabled, 'levels': {'STIG': 1}}, 
+            {'_id': "1.1.1.12", 'description': 'Ensure sticky bit is set on all world-writable directories', 'function': CISAudit.audit_sticky_bit_on_world_writable_dirs, 'levels': {'server': 1, 'workstation': 1, 'STIG': 1}},
             # {'_id': "1.1.2", 'description': 'Ensure /tmp is configured', 'function': CISAudit.audit_partition_is_separate, 'kwargs': {'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.3", 'description': 'Ensure noexec option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'noexec', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.4", 'description': 'Ensure nodev option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'nodev', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
@@ -2448,7 +2485,6 @@ benchmarks = {
             # {'_id': "1.1.19", 'description': "Ensure noexec option set on removable media partitions", 'function': CISAudit.audit_removable_partition_option_is_set, 'kwargs': {'option': 'noexec'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.20", 'description': "Ensure nodev option set on removable media partitions", 'function': CISAudit.audit_removable_partition_option_is_set, 'kwargs': {'option': 'nodev'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.21", 'description': "Ensure nosuid option set on removable media partitions", 'function': CISAudit.audit_removable_partition_option_is_set, 'kwargs': {'option': 'nosuid'}, 'levels': {'server': 1, 'workstation': 1}},
-            # {'_id': "1.1.22", 'description': 'Ensure sticky bit is set on all world-writable directories', 'function': CISAudit.audit_sticky_bit_on_world_writable_dirs, 'levels': {'server': 1, 'workstation': 1}, 'type': "manual"},
             # {'_id': "1.1.23", 'description': "Disable Automounting", 'function': CISAudit.audit_service_is_disabled, 'kwargs': {'service': 'autofs'}, 'levels': {'server': 1, 'workstation': 2}},
             # {'_id': "1.1.24", 'description': "Disable USB Storage", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'module': 'usb-storage'}, 'levels': {'server': 1, 'workstation': 2}},
             # {'_id': "1.2", 'description': "Configure Software Updates", 'type': "header"},
