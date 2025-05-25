@@ -21,6 +21,8 @@ import stat  # https://docs.python.org/3/library/stat.html
 import subprocess  # https://docs.python.org/3/library/subprocess.html
 import sys  # https://docs.python.org/3/library/sys.html
 import glob # https://docs.python.org/3/library/glob.html
+import shutil # https://docs.python.org/3/library/shutil.html
+import pathlib # https://docs.python.org/3/library/pathlib.html
 from argparse import (
     ArgumentParser,  # https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser
 )
@@ -1251,8 +1253,8 @@ class CISAudit:
     def audit_kernel_module_is_disabled(self, l_mname: str, l_mtype: str) -> int:
         state = 0
 
-        def module_check() -> str: 
-            nonlocal state, l_mname, l_mtype 
+        def module_check() -> str:
+            nonlocal state, l_mname, l_mtype
 
             l_output = ""
             l_output2 = ""
@@ -1350,7 +1352,7 @@ class CISAudit:
 
         module_check()
         if state > 0 and self.config.fix:
-            self.log.info(f"Fixing audit_kernel_module_is_disabled") 
+            self.log.info(f"Fixing audit_kernel_module_is_disabled")
             self.fix_audit_kernel_module_is_disabled(l_mname, l_mtype)
             state = 0
             module_check()
@@ -1358,40 +1360,40 @@ class CISAudit:
 
         return state
 
-    def encryption_is_enabled(self) -> int: 
-        # Not implemented yet 
+    def encryption_is_enabled(self) -> int:
+        # Not implemented yet
         return -2
 
-    def cryptographic_mechanisms_enabled(self) -> int: 
-        # Not implemented yet 
-        return -2                                                        
+    def cryptographic_mechanisms_enabled(self) -> int:
+        # Not implemented yet
+        return -2
 
-    def fix_audit_kernel_module_is_disabled(self, l_mname, l_mtype) -> None: 
+    def fix_audit_kernel_module_is_disabled(self, l_mname, l_mtype) -> None:
        l_mpath = "/lib/modules/**/kernel/" + l_mtype
        l_mpname = l_mname.replace('-', '_')
        l_mndir = l_mname.replace('-', '/')
-       
+
        def module_loadable_fix():
            # If the module is currently loadable, add "install {MODULE_NAME} /bin/false" to a file in "/etc/modprobe.d"
            try:
-               l_loadable = subprocess.check_output(["modprobe", "-n", "-v", l_mname], 
-                                                  stderr=subprocess.STDOUT, 
+               l_loadable = subprocess.check_output(["modprobe", "-n", "-v", l_mname],
+                                                  stderr=subprocess.STDOUT,
                                                   universal_newlines=True)
            except subprocess.CalledProcessError as e:
                l_loadable = e.output
-               
+
            if len(l_loadable.splitlines()) > 1:
                filtered_lines = []
                for line in l_loadable.splitlines():
                    if re.search(r"(^\s*install|\b" + l_mname + r')\b', line):
                        filtered_lines.append(line)
                l_loadable = "\n".join(filtered_lines)
-               
+
            if not re.search(r"^\s*install\s+/bin/(true|false)", l_loadable):
                self.log.debug(f"\n - setting module: \"{l_mname}\" to be not loadable")
                with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
                    f.write(f"install {l_mname} /bin/false\n")
-       
+
        def module_loaded_fix():
            # If the module is currently loaded, unload the module
            try:
@@ -1401,14 +1403,14 @@ class CISAudit:
                    subprocess.run(["modprobe", "-r", l_mname], check=True)
            except subprocess.CalledProcessError:
                pass
-       
+
        def module_deny_fix():
-           self.log.info(f"deny listing \"{l_mname}\"") 
+           self.log.info(f"deny listing \"{l_mname}\"")
            # If the module isn't deny listed, denylist the module
            try:
-               modprobe_config = subprocess.check_output(["modprobe", "--showconfig"], 
+               modprobe_config = subprocess.check_output(["modprobe", "--showconfig"],
                                                         universal_newlines=True)
-               
+
                if not re.search(r"^\s*blacklist\s+" + l_mpname + r'\b', modprobe_config, re.MULTILINE):
                    self.log.debug(f"\n - deny listing \"{l_mname}\"")
                    with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
@@ -1418,7 +1420,7 @@ class CISAudit:
                self.log.debug(f"\n - deny listing \"{l_mname}\"")
                with open(f"/etc/modprobe.d/{l_mpname}.conf", "a") as f:
                    f.write(f"blacklist {l_mname}\n")
-       
+
        # Check if the module exists on the system
        module_dirs = glob.glob(l_mpath, recursive=True)
        for l_mdir in module_dirs:
@@ -1426,8 +1428,8 @@ class CISAudit:
            if os.path.isdir(module_path) and len(os.listdir(module_path)) > 0:
                self.log.debug(f"\n - module: \"{l_mname}\" exists in \"{l_mdir}\"\n - checking if disabled...")
                module_deny_fix()
-               
-               current_kernel = subprocess.check_output(["uname", "-r"], 
+
+               current_kernel = subprocess.check_output(["uname", "-r"],
                                                       universal_newlines=True).strip()
                if l_mdir == f"/lib/modules/{current_kernel}/kernel/{l_mtype}":
                    module_loadable_fix()
@@ -1684,12 +1686,134 @@ class CISAudit:
 
     def audit_partition_is_separate(self, partition: str) -> int:
         state = 0
-        cmd = Rf'mount | grep -E "\s{partition}\s"'
-        r = self._shellexec(cmd)
-        if partition not in r.stdout[0]:
-            state += 1
+
+        def check_tmp_mount():
+            """Check if /tmp is mounted and verify mount options"""
+            try:
+                # Run findmnt command to check /tmp mount
+                result = subprocess.run(
+                    ['findmnt', '-nk', '/tmp'],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+
+                # Parse the output
+                lines = result.stdout.strip().split('\n')
+                if lines and lines[0]:
+                    mount_info = lines[0].split()
+                    if len(mount_info) >= 4:
+                        target = mount_info[0]
+                        source = mount_info[1]
+                        fstype = mount_info[2]
+                        options = mount_info[3]
+
+                        self.log.debug("✓ /tmp mount found:")
+                        self.log.debug(f"  Target: {target}")
+                        self.log.debug(f"  Source: {source}")
+                        self.log.debug(f"  Filesystem: {fstype}")
+                        self.log.debug(f"  Options: {options}")
+
+                        # Check for security mount options
+                        required_options = ['nosuid', 'nodev', 'noexec']
+                        missing_options = [opt for opt in required_options if opt not in options]
+
+                        if missing_options:
+                            self.log.debug(f"⚠ Warning: Missing recommended security options: {', '.join(missing_options)}")
+                        else:
+                            self.log.debug("✓ All recommended security options present")
+
+                        return True
+                    else:
+                        self.log.debug("✗ Unexpected findmnt output format")
+                        return False
+                else:
+                    print("✗ /tmp mount not found")
+                    return False
+
+            except subprocess.CalledProcessError as e:
+                print(f"✗ Error running findmnt: {e}")
+                return False
+            except FileNotFoundError:
+                print("✗ findmnt command not found")
+                return False
+
+        def check_systemd_tmp_mount():
+            """Check if tmp.mount is enabled in systemd"""
+            try:
+                result = subprocess.run(
+                    ['systemctl', 'is-enabled', 'tmp.mount'],
+                    capture_output=True,
+                    text=True
+                )
+
+                status = result.stdout.strip()
+
+                if result.returncode == 0:
+                    print(f"✓ tmp.mount is enabled: {status}")
+                    return True
+                else:
+                    print(f"✗ tmp.mount is not enabled: {status}")
+                    return False
+
+            except subprocess.CalledProcessError as e:
+                print(f"✗ Error checking systemctl: {e}")
+                return False
+            except FileNotFoundError:
+                print("✗ systemctl command not found")
+                return False
+
+        if not check_tmp_mount() or not check_systemd_tmp_mount():
+            state = 1
+
+        if state > 0 and self.config.fix:
+            self.log.info(f"Fixing audit_partition_is_separate")
+            self.fix_audit_partition_is_separate()
+
+        if check_tmp_mount() and check_systemd_tmp_mount():
+            state = 0
 
         return state
+
+
+    def fix_audit_partition_is_separate(self):
+        # Ensure systemd is configured to mount /tmp at boot
+        self.log.info("Ensuring systemd is configured to mount /tmp at boot")
+        subprocess.run(['systemctl', 'unmask', 'tmp.mount'], check=True)
+
+        # Modify /etc/fstab to configure /tmp mount options
+        fstab_path = "/etc/fstab"
+        fstab_path_backup = f"{fstab_path}.bak"
+
+        fstab_entry = r"/tmp\ttmpfs\tdefaults,noexec,nosuid,nodev\t0\t0\n"
+
+        try:
+            with open(fstab_path, "r") as fstab:
+                fstab_contents = fstab.readlines()
+
+            # Check if /tmp is already configured in /etc/fstab
+            if not any("/tmp" in line for line in fstab_contents):
+                """Create backup of /etc/fstab"""
+                if pathlib.Path(fstab_path).exists():
+                    print(f"Creating backup: {fstab_path_backup}")
+                    shutil.copy2(fstab_path, fstab_path_backup)
+                    self.log.info("✓ /etc/fstab backed up")
+
+                with open(fstab_path, "a") as fstab:
+                    fstab.write(fstab_entry)
+                    self.log.info(f"Added /tmp configuration to {fstab_path}")
+            else:
+                self.log.info(f"/tmp is already configured in {fstab_path}")
+
+        except Exception as e:
+            self.log.error(f"Failed to modify {fstab_path}: {e}")
+
+        # Remount /tmp with the new options
+        try:
+            subprocess.run(['mount', '-o', 'remount', '/tmp'], check=True)
+            self.log.info("/tmp remounted with new options")
+        except subprocess.CalledProcessError as e:
+            self.log.error(f"Failed to remount /tmp: {e}")
 
     def audit_partition_option_is_set(self, partition: str, option: str) -> int:
         state = 1
@@ -2107,7 +2231,7 @@ class CISAudit:
             cmd = R"df --local -P | awk '{if (NR!=1) print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \) 2>/dev/null"
             return self._shellexec(cmd)
 
-        r = check() 
+        r = check()
 
         if r.returncode == 0 and r.stdout[0] == '':
             state = 0
@@ -2116,7 +2240,7 @@ class CISAudit:
 
         if state > 0 and self.config.fix:
             self.log.info(f"Fixing audit_sticky_bit_on_world_writable_dirs")
-            self.fix_sticky_bit_on_world_writable_dir() 
+            self.fix_sticky_bit_on_world_writable_dir()
             r = check()
 
             if r.returncode == 0 and r.stdout[0] == '':
@@ -2124,7 +2248,7 @@ class CISAudit:
             elif r.returncode != 0 or r.stdout[0] != '':
                 state = 1
 
-            
+
 
 
         return state
@@ -2450,22 +2574,22 @@ class CISAudit:
 benchmarks = {
     'ubuntu20': {
         '1.1.0': [
-            {'_id': "1", 'description': "Initial Setup", 'type': "header"},
-            {'_id': "1.1", 'description': "Filesystem Configuration", 'type': "header"},
-            {'_id': "1.1.1", 'description': "Disable unused filesystems", 'type': "header"},
-            {'_id': "1.1.1.1", 'description': "Ensure mounting of cramfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'cramfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            {'_id': "1.1.1.2", 'description': "Ensure mounting of freevxfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'freevxfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            {'_id': "1.1.1.3", 'description': "Ensure mounting of hfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'hfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            {'_id': "1.1.1.4", 'description': "Ensure mounting of hfsplus is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'hfsplus', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
-            {'_id': "1.1.1.5", 'description': "Ensure mounting of jffs2 is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'jffs2', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}}, 
-            {'_id': "1.1.1.6", 'description': "Ensure mounting of overlayfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'overlayfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}}, 
-            {'_id': "1.1.1.7", 'description': "Ensure mounting of squashfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'squashfs', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}}, 
-            {'_id': "1.1.1.8", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'udf', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}}, 
-            {'_id': "1.1.1.9", 'description': "Ensure mounting of usb-storage is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'usb-storage', 'l_mtype': 'drivers'}, 'levels': {'server': 1, 'workstation': 2, 'STIG': 1}},
-            {'_id': "1.1.1.10", 'description': "Ensure data-at-rest encryption is enabled", 'function': CISAudit.encryption_is_enabled, 'levels': {'STIG': 1}}, 
-            {'_id': "1.1.1.11", 'description': "Ensure data-at-rest employs cryptographic mechanisms to prevent unauthorized modification", 'function': CISAudit.cryptographic_mechanisms_enabled, 'levels': {'STIG': 1}}, 
-            {'_id': "1.1.1.12", 'description': 'Ensure sticky bit is set on all world-writable directories', 'function': CISAudit.audit_sticky_bit_on_world_writable_dirs, 'levels': {'server': 1, 'workstation': 1, 'STIG': 1}},
-            # {'_id': "1.1.2", 'description': 'Ensure /tmp is configured', 'function': CISAudit.audit_partition_is_separate, 'kwargs': {'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1", 'description': "Initial Setup", 'type': "header"},
+            #  {'_id': "1.1", 'description': "Filesystem Configuration", 'type': "header"},
+            #  {'_id': "1.1.1", 'description': "Disable unused filesystems", 'type': "header"},
+            #  {'_id': "1.1.1.1", 'description': "Ensure mounting of cramfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'cramfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.2", 'description': "Ensure mounting of freevxfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'freevxfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.3", 'description': "Ensure mounting of hfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'hfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.4", 'description': "Ensure mounting of hfsplus is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'hfsplus', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.5", 'description': "Ensure mounting of jffs2 is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'jffs2', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.6", 'description': "Ensure mounting of overlayfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'overlayfs', 'l_mtype': 'fs'}, 'levels': {'server': 1, 'workstation': 1}},
+            #  {'_id': "1.1.1.7", 'description': "Ensure mounting of squashfs is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'squashfs', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}},
+            #  {'_id': "1.1.1.8", 'description': "Ensure mounting of udf is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'udf', 'l_mtype': 'fs'}, 'levels': {'server': 2, 'workstation': 2}},
+            #  {'_id': "1.1.1.9", 'description': "Ensure mounting of usb-storage is disabled", 'function': CISAudit.audit_kernel_module_is_disabled, 'kwargs': {'l_mname': 'usb-storage', 'l_mtype': 'drivers'}, 'levels': {'server': 1, 'workstation': 2, 'STIG': 1}},
+            #  {'_id': "1.1.1.10", 'description': "Ensure data-at-rest encryption is enabled", 'function': CISAudit.encryption_is_enabled, 'levels': {'STIG': 1}},
+            #  {'_id': "1.1.1.11", 'description': "Ensure data-at-rest employs cryptographic mechanisms to prevent unauthorized modification", 'function': CISAudit.cryptographic_mechanisms_enabled, 'levels': {'STIG': 1}},
+            #  {'_id': "1.1.1.12", 'description': 'Ensure sticky bit is set on all world-writable directories', 'function': CISAudit.audit_sticky_bit_on_world_writable_dirs, 'levels': {'server': 1, 'workstation': 1, 'STIG': 1}},
+            {'_id': "1.1.2.1", 'description': 'Ensure /tmp is configured', 'function': CISAudit.audit_partition_is_separate, 'kwargs': {'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.3", 'description': 'Ensure noexec option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'noexec', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.4", 'description': 'Ensure nodev option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'nodev', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
             # {'_id': "1.1.5", 'description': 'Ensure nosuid option set on /tmp partition', 'function': CISAudit.audit_partition_option_is_set, 'kwargs': {'option': 'nosuid', 'partition': '/tmp'}, 'levels': {'server': 1, 'workstation': 1}},
@@ -2832,9 +2956,9 @@ Examples:
     ## --fix
     if args.fix:
         logger.debug('Remediation enabled')
-        if os.getuid() != 0: 
-            logger.error('Remediation requires root privileges') 
-            sys.exit(1) 
+        if os.getuid() != 0:
+            logger.error('Remediation requires root privileges')
+            sys.exit(1)
 
     ## --nice
     if args.nice:
